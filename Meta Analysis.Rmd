@@ -1,0 +1,484 @@
+---
+title: "Costs of Exercise versus Exercise-Plus interventions on falls"
+author: "RSF"
+date: "2022-08-17"
+output: 
+  html_document:
+    toc: true
+    theme: united
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 1) Data set-up and management
+
+Load Packages
+```{r}
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load(readxl, plyr, robumeta,metafor, clubSandwich, ggplot2, psych, naniar)
+```
+
+Import and Prep Data for Meta-Analysis
+```{r}
+setwd("~/Desktop/Manuscripts/Ongoing Projects/Cost Analysis of Unimodal vs. Multimodal Exercise Interventions for Fall Prevention")#Directory where you put the spreadsheet
+meta_data <- read_excel("META FINAL FINAL.xlsx")
+
+spaceless <- function(x) {colnames(x) <- gsub(" ", "_", colnames(x));x}
+meta_data_spaceless <- spaceless(meta_data)
+
+data1<-meta_data_spaceless %>% replace_with_na_all(condition = ~.x == "NR")
+data2<-subset(data1, Exclude=="No")
+
+library(dplyr)
+data3<-rename(data2, "Sample_size"="Total_number_of_participants","Intervention_Type"="Intervention_Type_(EX,_EX-PluS)",
+              "Intervention_Mode"="Intervention_Mode_(AT,_RT,_Multimodal)", "Intervention_Frequency"="Intervention_Frequency_(days/week)",
+              "Intervention_Duration"="Intervention_Duration_(weeks)", "Economic_Perspective"="Economic_Perspective_(Healthcare,_Societal,_Personal)",
+              "Incremental_Costs"="Incremental_costs_in_2021_USD","Incremental_Costs_SE"="Incremental_costs_standard_error_in_2021_USD",
+              "Estimated_Incremental_Costs_SE"="Estimated_Standard_Error_(Using_similar_study_with_similar_SE)",
+              "Incremental_QOLYs_SE"="Incremental_QoLYs_standard_error_in_2021_USD","Estimated_QOLYs_SE"="Estimated_SE_for_QoLYs_(Using_study_with_similar_SE)",
+              "IRR_of_Falls"="Mean_Difference_in_IRR_of_Falls", "IRR_of_Falls_SE"="IRR_Standard_Error_of_estimate",
+              "Estimated_IRR_of_Falls_SE"="Estimated_SE_of_IRR", "INT_N"="Treatment_group_sample_size", "CON_N"="Control_group_sample_size")
+
+
+data4<-data3 %>% 
+  mutate(
+    Incremental_Costs_SE_Final = case_when(
+      !is.na(Incremental_Costs_SE) ~ Incremental_Costs_SE,
+      !is.na(Estimated_Incremental_Costs_SE) ~ Estimated_Incremental_Costs_SE
+      ),
+    Incremental_QOLYs_SE_Final = case_when(
+      !is.na(Incremental_QOLYs_SE) ~ Incremental_QOLYs_SE,
+      !is.na(Estimated_QOLYs_SE) ~ Estimated_QOLYs_SE
+    ),
+    IRR_of_Falls_SE_Final = case_when(
+      !is.na(IRR_of_Falls_SE) ~ IRR_of_Falls_SE,
+      !is.na(Estimated_IRR_of_Falls_SE) ~ Estimated_IRR_of_Falls_SE
+    ),
+    Incremental_Costs_SMD = Incremental_Costs/Incremental_Costs_SE_Final,
+    Incremental_QOLYs_SMD = Incremental_QoLYs/Incremental_QOLYs_SE_Final,
+    IRR_of_Falls_SMD = log(IRR_of_Falls),
+    J = 1 - (3/(4*INT_N + CON_N - 2) - 1),
+    Incremental_Costs_Variance = (Sample_size*Incremental_Costs_SE_Final),
+    Incremental_QOLYs_Variance = (Sample_size*Incremental_QOLYs_SE_Final),
+    Incremental_Costs_SMD_var = ((INT_N + CON_N)/(INT_N*CON_N)) + ((Incremental_Costs_SMD^2)/(2*(INT_N+CON_N))),
+    Incremental_QOLYs_SMD_var = ((INT_N + CON_N)/(INT_N*CON_N)) + ((Incremental_QOLYs_SMD^2)/(2*(INT_N+CON_N))),
+    IRR_of_Falls_SMD_var = ((INT_N + CON_N)/(INT_N*CON_N)) + ((IRR_of_Falls_SMD^2)/(2*(INT_N+CON_N))),
+    Incremental_Costs_g = Incremental_Costs_SMD * J,
+    Incremental_Costs_g_var = J^2 * Incremental_Costs_SMD_var,
+    Incremental_Costs_g_se = sqrt(Incremental_Costs_g_var/Sample_size),
+    Incremental_QOLYs_g = Incremental_QOLYs_SMD * J,
+    Incremental_QOLYs_g_var = J^2 * Incremental_QOLYs_SMD_var,
+    Incremental_QOLYs_g_se = sqrt(Incremental_QOLYs_g_var/Sample_size),
+    IRR_of_Falls_g = IRR_of_Falls_SMD * J,
+    IRR_of_Falls_g_var = J^2 * IRR_of_Falls_SMD_var,
+    IRR_of_Falls_g_se = sqrt(IRR_of_Falls_g_var/Sample_size),
+    Incremental_Costs_UL95CI = Incremental_Costs + 1.96*Incremental_QOLYs_SE_Final,
+    Incremental_Costs_LL95CI = Incremental_Costs - 1.96*Incremental_QOLYs_SE_Final,
+    Incremental_QOLYs_UL95CI = Incremental_QoLYs + 1.96*Incremental_QOLYs_SE_Final,
+    Incremental_QOLYs_LL95CI = Incremental_QoLYs - 1.96*Incremental_QOLYs_SE_Final,
+    IRR_Falls_SMD_UL95CI = IRR_of_Falls_g + 1.96*IRR_of_Falls_g_se,
+    IRR_Falls_SMD_LL95CI = IRR_of_Falls_g - 1.96*IRR_of_Falls_g_se
+  )
+```
+
+# 2) Descriptive Analyses for Meta
+
+Number of effect sizes for incremental cost
+```{r}
+nrow(data4[!is.na(data4$Incremental_Costs_g),])
+```
+
+Number of studies with effect sizes for incremental costs
+```{r}
+Incremental_costs<-subset(data4, !is.na(Incremental_Costs_g))
+Incremental_costs %>%
+  count(Study_ID)
+```
+
+Number of studies with effect sizes for incremental costs by intervention type
+```{r}
+Incremental_costs %>%
+  count(Study_ID, Intervention_Type)
+```
+
+Number of participants included in effect sizes for incremental costs
+```{r}
+sum(Incremental_costs$Sample_size)
+```
+
+Number of effect sizes for incremental QALYs
+```{r}
+nrow(data4[!is.na(data4$Incremental_QOLYs_g),])
+```
+
+Number of studies with effect sizes for incremental QALYs
+```{r}
+Incremental_QOLYs<-subset(data4, !is.na(Incremental_QOLYs_g))
+Incremental_QOLYs %>%
+  count(Study_ID)
+```
+
+Number of studies with effect sizes for incremental QALYs by intervention type
+```{r}
+Incremental_QOLYs %>%
+  count(Study_ID, Intervention_Type)
+```
+
+Number of participants included in effect sizes for incremental QALYs
+```{r}
+sum(Incremental_QOLYs$Sample_size)
+```
+
+Number of effect sizes for IRR of Falls
+```{r}
+nrow(data4[!is.na(data4$IRR_of_Falls_g),])
+```
+
+Number of studies with effect sizes for IRR of Falls
+```{r}
+IRR_Falls<-subset(data4, !is.na(IRR_of_Falls_g))
+IRR_Falls %>%
+  count(Study_ID)
+```
+
+Number of studies with effect sizes for IRR of Falls by intervention type
+```{r}
+IRR_Falls %>%
+  count(Study_ID, Intervention_Type)
+```
+
+Number of participants included in effect sizes for IRR of Falls
+```{r}
+sum(IRR_Falls$Sample_size)
+```
+
+Sample size total
+```{r}
+table(data4$Study_ID,data4$Sample_size)
+123+155+217+233+240+301+323+340+364+381+409+450+830+1090+6420+9803      
+```
+
+# 3) Main Effect Sizes for Incremental Costs, QALYs, and IRR of Falls
+
+Incremental Costs (Unstandardized estimates)
+```{r}
+incremental_costs.unstandardized<-robu(Incremental_Costs~1, var=Incremental_Costs_Variance, studynum=Study_ID, Incremental_costs)
+print(incremental_costs.unstandardized)
+sensitivity(incremental_costs.unstandardized)
+```
+
+Forest Plot for Incremental Costs
+```{r}
+forest.costs<-subset(Incremental_costs, select = c(Study_ID,Intervention_Type,Incremental_Costs,Incremental_Costs_LL95CI, 
+                                                   Incremental_Costs_UL95CI))
+forest.costs$Effect_size<-c(2:24)
+forest.costs$Study_InterventionType<-paste(forest.costs$Study_ID,forest.costs$Intervention_Type)
+forest.costs$rev_ES<-rev(forest.costs$Effect_size)  
+Overall.effect<-c("Overall", NA, 356, -178, 890, 1, "Overall", 1)
+forest.costs.plot<-rbind(forest.costs, Overall.effect)
+forest.costs.plot$rev_ES<-as.numeric(forest.costs.plot$rev_ES)
+forest.costs.plot$Incremental_Costs<-as.numeric(forest.costs.plot$Incremental_Costs)
+forest.costs.plot$Incremental_Costs_LL95CI<-as.numeric(forest.costs.plot$Incremental_Costs_LL95CI)
+forest.costs.plot$Incremental_Costs_UL95CI<-as.numeric(forest.costs.plot$Incremental_Costs_UL95CI)
+
+Incremental.Costs.plot<-ggplot(forest.costs.plot, aes(y=rev_ES, x=Incremental_Costs, xmin=Incremental_Costs_LL95CI, xmax=Incremental_Costs_UL95CI)) +
+  geom_point() + geom_errorbarh(height=.1) + scale_y_continuous(name= "", breaks=rev(1:nrow(forest.costs.plot)), labels=forest.costs.plot$Study_InterventionType) +
+  labs(title="Incremental Costs Forest Plot", x="Incremental Costs (2021 USD)", y = "Author, Year, Intervention Type" ) + 
+  geom_vline(xintercept=0, color="black", linetype="dashed", alpha=.5) + theme_classic()
+
+Incremental.Costs.plot
+```
+
+Incremental QALYs (Unstandardized estimates)
+```{r}
+incremental_qolys.unstandardized<-robu(Incremental_QoLYs~1, var=Incremental_QOLYs_Variance, studynum=Study_ID, Incremental_QOLYs)
+print(incremental_qolys.unstandardized)
+sensitivity(incremental_qolys.unstandardized)
+```
+
+Forest Plot for Incremental QALYs
+```{r}
+forest.qolys<-subset(Incremental_QOLYs, select = c(Study_ID,Intervention_Type,Incremental_QoLYs,Incremental_QOLYs_LL95CI, 
+                                                   Incremental_QOLYs_UL95CI))
+forest.qolys$Effect_size<-c(2:16)
+forest.qolys$Study_InterventionType<-paste(forest.qolys$Study_ID,forest.qolys$Intervention_Type)
+forest.qolys$rev_ES<-rev(forest.qolys$Effect_size)  
+Overall.effect<-c("Overall", NA, 0.0878, -0.308, 0.483, 1, "Overall", 1)
+forest.qolys.plot<-rbind(forest.qolys, Overall.effect)
+forest.qolys.plot$rev_ES<-as.numeric(forest.qolys.plot$rev_ES)
+forest.qolys.plot$Incremental_QoLYs<-as.numeric(forest.qolys.plot$Incremental_QoLYs)
+forest.qolys.plot$Incremental_QOLYs_LL95CI<-as.numeric(forest.qolys.plot$Incremental_QOLYs_LL95CI)
+forest.qolys.plot$Incremental_QOLYs_UL95CI<-as.numeric(forest.qolys.plot$Incremental_QOLYs_UL95CI)
+
+Incremental.Qolys.plot<-ggplot(forest.qolys.plot, aes(y=rev_ES, x=Incremental_QoLYs, xmin=Incremental_QOLYs_LL95CI, xmax=Incremental_QOLYs_UL95CI)) +
+  geom_point() + geom_errorbarh(height=.1) + scale_y_continuous(name= "", breaks=rev(1:nrow(forest.qolys.plot)), labels=forest.qolys.plot$Study_InterventionType) +
+  labs(title="Incremental QOLYs Forest Plot", x="Incremental QOLYs", y = "Author, Year, Intervention Type" ) + 
+  geom_vline(xintercept=0, color="black", linetype="dashed", alpha=.5) + theme_classic()
+
+Incremental.Qolys.plot
+```
+
+Incident Rate for Falls using Hedge's g. Estimates are re-transformed by exponentiation
+```{r}
+falls.g<-robu(IRR_of_Falls_g~1, var=IRR_of_Falls_g_var, studynum=Study_ID, IRR_Falls)
+print(falls.g)
+sensitivity(falls.g)
+irr.exp<-c(falls.g$reg_table$b.r, falls.g$reg_table$CI.L, falls.g$reg_table$CI.U)
+exp(irr.exp) #Point Estimate, 95% CI LL, 95% CI UL
+```
+
+Forest Plot for Incident Rate of Falls. Estimates are re-transformed by exponentiation
+```{r}
+forest.IRRs<-subset(IRR_Falls, select = c(Study_ID,Intervention_Type,IRR_of_Falls_g,IRR_Falls_SMD_LL95CI, 
+                                          IRR_Falls_SMD_UL95CI))
+forest.IRRs$Effect_size<-c(2:16)
+forest.IRRs$Study_InterventionType<-paste(forest.IRRs$Study_ID,forest.IRRs$Intervention_Type)
+forest.IRRs$rev_ES<-rev(forest.IRRs$Effect_size)  
+Overall.effect<-c("Overall", NA, -0.665, -1.04, -0.294, 1, "Overall", 1)
+forest.IRRs.plot<-rbind(forest.IRRs, Overall.effect)
+forest.IRRs.plot$rev_ES<-as.numeric(forest.IRRs.plot$rev_ES)
+forest.IRRs.plot$IRR_of_Falls_g<-as.numeric(forest.IRRs.plot$IRR_of_Falls_g)
+forest.IRRs.plot$IRR_Falls_SMD_LL95CI<-as.numeric(forest.IRRs.plot$IRR_Falls_SMD_LL95CI)
+forest.IRRs.plot$IRR_Falls_SMD_UL95CI<-as.numeric(forest.IRRs.plot$IRR_Falls_SMD_UL95CI)
+forest.IRRs.plot$IRR_exp<-exp(forest.IRRs.plot$IRR_of_Falls_g)
+forest.IRRs.plot$UL_exp<-exp(forest.IRRs.plot$IRR_Falls_SMD_UL95CI)
+forest.IRRs.plot$LL_exp<-exp(forest.IRRs.plot$IRR_Falls_SMD_LL95CI)
+
+IRR.plot<-ggplot(forest.IRRs.plot, aes(y=rev_ES, x=IRR_exp, xmin=LL_exp, xmax=UL_exp)) +
+  geom_point() + geom_errorbarh(height=.1) + scale_y_continuous(name= "", breaks=rev(1:nrow(forest.IRRs.plot)), labels=forest.IRRs.plot$Study_InterventionType) +
+  labs(title="Incident Rate Ratio of Falls Forest Plot", x="Incident Rate Ratio", y = "Author, Year, Intervention Type" ) + 
+  geom_vline(xintercept=1, color="black", linetype="dashed", alpha=.5) + theme_classic()
+
+IRR.plot
+```
+
+# 4) Does Intervention Type (EX vs. EX-Plus) moderate the effects on incremental costs, QALYs, or incident rate of falls
+
+Incremental Costs
+```{r}
+robu(Incremental_Costs~Intervention_Type-1, var.eff.size = Incremental_Costs_Variance, studynum = Study_ID, data = Incremental_costs)
+costs.mod<-robu(Incremental_Costs~Intervention_Type-1, var.eff.size = Incremental_Costs_Variance, studynum = Study_ID, data = Incremental_costs)
+cpairs<- constraints<-matrix(c(1,-1), 1,2)
+Wald_test(costs.mod, constraints = cpairs, vcov = "CR2", tidy = TRUE)
+```
+
+Incremental QALYs
+```{r}
+robu(Incremental_QoLYs~Intervention_Type-1, var.eff.size = Incremental_QOLYs_Variance, studynum = Study_ID, data = Incremental_QOLYs)
+qolys.mod<-robu(Incremental_QoLYs~Intervention_Type-1, var.eff.size = Incremental_QOLYs_Variance, studynum = Study_ID, data = Incremental_QOLYs)
+cpairs<- constraints<-matrix(c(1,-1), 1,2)
+Wald_test(qolys.mod, constraints = cpairs, vcov = "CR2", tidy = TRUE)
+```
+
+Incident Rate of Falls
+```{r}
+falls.mod<-robu(IRR_of_Falls_SMD~Intervention_Type-1, var.eff.size = IRR_of_Falls_SMD_var, studynum = Study_ID, data = IRR_Falls)
+falls.mod
+cpairs<- constraints<-matrix(c(1,-1), 1,2)
+Wald_test(falls.mod, constraints = cpairs, vcov = "CR2", tidy = TRUE)
+
+irr.exp<-c(falls.mod$reg_table$b.r, falls.mod$reg_table$CI.L, falls.mod$reg_table$CI.U)
+irr.exp
+exp(irr.exp) #Point Estimate EX, Point Estimate EX-Plus, 95% CI LL EX, 95% CI LL EX-Plus, 95% CI UL EX, 95% CI UL EX-Plus
+
+```
+
+# 5) Funnel Plots for Publication Bias
+
+Incremental Costs
+```{r}
+meta.res.costs<-rma.mv(yi=Incremental_Costs_g,V=Incremental_Costs_g_var,data=Incremental_costs,slab=Study_ID)
+funnel(meta.res.costs, xlab = "Hedge's g for incremental costs")
+```
+
+Incremental QALYs
+```{r}
+meta.res.qolys<-rma.mv(yi=Incremental_QOLYs_g,V=Incremental_QOLYs_g_var,data=Incremental_QOLYs,slab=Study_ID)
+funnel(meta.res.qolys, xlab = "Hedge's g for incremental QALYs")
+```
+
+Incident Rate of Falls
+```{r}
+meta.res.falls<-rma.mv(yi=IRR_of_Falls_g,V=IRR_of_Falls_g_var,data=IRR_Falls,slab=Study_ID)
+funnel(meta.res.falls, xlab = "Hedge's g for IRR of Falls")
+```
+
+# 6) PEESE
+
+Incremental Costs
+```{r}
+Incremental_costs$sesqrd.ES<-Incremental_costs$Incremental_Costs_g_se^2
+peese.rve.costs <- robu(Incremental_Costs_g~sesqrd.ES, var.eff.size = Incremental_Costs_g_var, studynum = Study_ID, data = Incremental_costs)
+print(peese.rve.costs)
+```
+
+Incremental QALYs
+```{r}
+Incremental_QOLYs$sesqrd.ES<-Incremental_QOLYs$Incremental_QOLYs_g_se^2
+peese.rve.qoly <- robu(Incremental_QOLYs_g~sesqrd.ES, var.eff.size = Incremental_QOLYs_g_var, studynum = Study_ID, data = Incremental_QOLYs)
+print(peese.rve.qoly)
+```
+
+Incident Rate of Falls
+```{r}
+IRR_Falls$sesqrd.ES<-IRR_Falls$IRR_of_Falls_g_se^2
+peese.rve.falls <- robu(IRR_of_Falls_g~sesqrd.ES, var.eff.size = IRR_of_Falls_g_var, studynum = Study_ID, data = IRR_Falls)
+print(peese.rve.falls)
+```
+
+# 7) Egger's Regression Test for Dependent Effect Sizes
+
+Incremental Costs
+```{r}
+pet.rve.cost<-robu(Incremental_Costs_g~Incremental_Costs_g_se, var.eff.size=Incremental_Costs_g_var, 
+                   studynum=Study_ID, data=Incremental_costs)
+
+print(pet.rve.cost)
+```
+
+Incremental QALYs
+```{r}
+pet.rve.qolys<-robu(Incremental_QOLYs_g~Incremental_QOLYs_g_se, var.eff.size=Incremental_QOLYs_g_var, 
+                   studynum=Study_ID, data=Incremental_QOLYs)
+
+print(pet.rve.qolys)
+```
+
+Incident Rate of Falls
+```{r}
+pet.rve.falls<-robu(IRR_of_Falls_g~IRR_of_Falls_g_se, var.eff.size=IRR_of_Falls_g_var, 
+                    studynum=Study_ID, data=IRR_Falls)
+
+print(pet.rve.falls)
+```
+
+# 8) Leave-One-Out Analyses
+
+Incremental Costs
+```{r}
+leave.one.out.all<- function(rownum){
+  
+  # subset dataframe
+  vec <- rep(TRUE, nrow(Incremental_costs))
+  vec[rownum] <- FALSE
+  inf <- subset(Incremental_costs, vec)
+  
+  # fit reference model
+  rve.model.ref <- robu(Incremental_Costs~1,var=Incremental_Costs_Variance,studynum=Study_ID, Incremental_costs)
+  
+  # fit adjusted model
+  rve.model <- robu(Incremental_Costs~1,var=Incremental_Costs_Variance,studynum=Study_ID, data = inf)
+  
+  # return results
+  results.vec <- c(ES.study = round(Incremental_costs$Incremental_Costs[rownum], 3),
+                   ES.adj = round(rve.model$reg_table$b.r, 3),
+                   se.ES.adj = round(rve.model$reg_table$SE, 3),
+                   p.adj = round(rve.model$reg_table$prob, 5),
+                   diff.ES = round(rve.model$reg_table$b.r - rve.model.ref$reg_table$b.r, 3),
+                   diff.se.ES = round(rve.model$reg_table$SE - rve.model.ref$reg_table$SE, 3),
+                   diff.p = round(rve.model$reg_table$prob - rve.model.ref$reg_table$prob, 5),
+                   diff.isq = round(rve.model$mod_info$I.2 - rve.model.ref$mod_info$I.2, 3))
+  return(results.vec)
+}
+
+inf.all <- sapply(1:nrow(Incremental_costs), leave.one.out.all)
+inf.all <- data.frame(t(inf.all))
+inf.all <- data.frame(label = paste(Incremental_costs$Study_ID, Incremental_costs$Intervention_Type, sep = " / "),
+                      inf.all)
+inf.all$z.ES.study <- round(scale(inf.all$ES.study), 2)
+
+inf.all
+```
+
+Incremental QALYs
+```{r}
+leave.one.out.all.qoly<- function(rownum){
+  
+  # subset dataframe
+  vec <- rep(TRUE, nrow(Incremental_QOLYs))
+  vec[rownum] <- FALSE
+  inf <- subset(Incremental_QOLYs, vec)
+  
+  # fit reference model
+  rve.model.ref <- robu(Incremental_QoLYs~1,var=Incremental_QOLYs_Variance,studynum=Study_ID, Incremental_QOLYs)
+  
+  # fit adjusted model
+  rve.model <- robu(Incremental_QoLYs~1,var=Incremental_QOLYs_Variance,studynum=Study_ID, data = inf)
+  
+  # return results
+  results.vec <- c(ES.study = round(Incremental_QOLYs$Incremental_QoLYs[rownum], 3),
+                   ES.adj = round(rve.model$reg_table$b.r, 3),
+                   se.ES.adj = round(rve.model$reg_table$SE, 3),
+                   p.adj = round(rve.model$reg_table$prob, 5),
+                   diff.ES = round(rve.model$reg_table$b.r - rve.model.ref$reg_table$b.r, 3),
+                   diff.se.ES = round(rve.model$reg_table$SE - rve.model.ref$reg_table$SE, 3),
+                   diff.p = round(rve.model$reg_table$prob - rve.model.ref$reg_table$prob, 5),
+                   diff.isq = round(rve.model$mod_info$I.2 - rve.model.ref$mod_info$I.2, 3))
+  return(results.vec)
+}
+
+inf.all <- sapply(1:nrow(Incremental_QOLYs), leave.one.out.all.qoly)
+inf.all <- data.frame(t(inf.all))
+inf.all <- data.frame(label = paste(Incremental_QOLYs$Study_ID, Incremental_QOLYs$Intervention_Type, sep = " / "),
+                      inf.all)
+inf.all$z.ES.study <- round(scale(inf.all$ES.study), 2)
+
+inf.all
+```
+
+Incident Rate of Falls
+```{r}
+leave.one.out.all.falls<- function(rownum){
+  
+  # subset dataframe
+  vec <- rep(TRUE, nrow(IRR_Falls))
+  vec[rownum] <- FALSE
+  inf <- subset(IRR_Falls, vec)
+  
+  # fit reference model
+  rve.model.ref <- robu(IRR_of_Falls_g~1,var=IRR_of_Falls_g_var,studynum=Study_ID, IRR_Falls)
+  
+  # fit adjusted model
+  rve.model <- robu(IRR_of_Falls_g~1,var=IRR_of_Falls_g_var,studynum=Study_ID, data = inf)
+  
+  # return results
+  results.vec <- c(ES.study = round(IRR_Falls$IRR_of_Falls_g[rownum], 3),
+                   ES.adj = round(rve.model$reg_table$b.r, 3),
+                   se.ES.adj = round(rve.model$reg_table$SE, 3),
+                   p.adj = round(rve.model$reg_table$prob, 5),
+                   diff.ES = round(rve.model$reg_table$b.r - rve.model.ref$reg_table$b.r, 3),
+                   diff.se.ES = round(rve.model$reg_table$SE - rve.model.ref$reg_table$SE, 3),
+                   diff.p = round(rve.model$reg_table$prob - rve.model.ref$reg_table$prob, 5),
+                   diff.isq = round(rve.model$mod_info$I.2 - rve.model.ref$mod_info$I.2, 3))
+  return(results.vec)
+}
+
+inf.all <- sapply(1:nrow(IRR_Falls), leave.one.out.all.falls)
+inf.all <- data.frame(t(inf.all))
+inf.all <- data.frame(label = paste(IRR_Falls$Study_ID, IRR_Falls$Intervention_Type, sep = " / "),
+                      inf.all)
+inf.all$z.ES.study <- round(scale(inf.all$ES.study), 2)
+
+inf.all
+```
+
+
+# 9) Do the effects differ if Farag et al. and Patil et al. are excluded from the meta?
+
+Both studies had incremental costs estimated using ICER data.
+
+Mark studies with estimated (i.e., Farag et al. and Patil et al.) versus reported incremental costs
+```{r}
+Incremental_costs$ES_calculation<-NA
+Incremental_costs$ES_calculation[Incremental_costs$Study_ID=="Farag et al., 2015" |
+                                   Incremental_costs$Study_ID=="Patil et al., 2015" ]<-"Estimated"
+Incremental_costs$ES_calculation[Incremental_costs$Study_ID!="Farag et al., 2015" &
+                                   Incremental_costs$Study_ID!="Patil et al., 2015" ]<-"Reported"
+```
+
+Moderation effect for determining if effect is different when excluding studies with estimated incremental costs
+```{r}
+robu(Incremental_Costs~ES_calculation-1, var.eff.size = Incremental_Costs_Variance, studynum = Study_ID, data = Incremental_costs)
+```
